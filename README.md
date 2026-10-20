@@ -2,7 +2,7 @@
 
 An Apache Beam project for cleaning food-order CSV data and separating orders by delivery status. A Jupyter notebook runs the workflow locally and writes text files. A Python script contains the BigQuery loading workflow and accepts Beam runner options for cloud execution.
 
-**Current state:** the local notebook pipeline has been verified against the included CSV. The BigQuery script requires the corrections listed under [Known limitations](#known-limitations) before cloud execution. Airflow dependencies are installed, but this repository does not yet include an Airflow DAG or infrastructure deployment configuration.
+**Current state:** the local notebook pipeline has been verified against the included CSV. The script has passed local checks with cloud calls replaced by test doubles; live BigQuery execution remains unverified. Airflow dependencies are installed, but this repository does not yet include an Airflow DAG or infrastructure deployment configuration.
 
 ## Contents
 
@@ -38,7 +38,7 @@ Python script extension:
 
 Both workflows match delivery status after trimming surrounding whitespace. `On Hold` and `Cancelled` orders are excluded from both output branches. The script appends a count field named `new_column`; the notebook does not append this field.
 
-The cleanup currently applies to every field. For example, `20.50` becomes `2050`, and punctuation in dates and times is removed. See the limitations before using the transformed data for analysis.
+The notebook cleanup applies to every field; the script preserves date, time, and numeric fields. For example, `20.50` becomes `2050`, and punctuation in dates and times is removed. See the limitations before using the transformed data for analysis.
 
 ## Repository structure
 
@@ -74,7 +74,7 @@ The CSV contains a header followed by 11 fields. The pipeline uses column positi
 | 9 | `ratings` | `ratings` |
 | 10 | `feedback` | `feedback` |
 
-The script adds `new_column` after these fields with the value ` 1` as text. Its declared schema uses `INTEGER` for `amount` and `STRING` for the other fields; the row mapper currently returns strings for every field.
+The script adds `new_column` after these fields with the value `1` as text. The mapper converts `amount` and `ratings` to integers to match the BigQuery schema; other destination fields remain strings.
 
 The included sample has **891 orders**:
 
@@ -165,7 +165,7 @@ After editing a helper function, rerun its definition cell before the pipeline c
 
 `src/beam.py` exposes an `--input` argument and forwards remaining arguments to `PipelineOptions`. Its `main()` function performs dataset setup before starting Beam. Importing the module does not submit a pipeline.
 
-**Resolve the cloud-specific issues in [Known limitations](#known-limitations) before running this script.** Cloud loading has not been verified, and the commands below describe its intended execution interface.
+Configure destinations and credentials before running this script. Cloud loading has not been verified; the commands below describe the existing execution interface.
 
 ### Configuration
 
@@ -175,12 +175,12 @@ The script currently hardcodes these values:
 | --- | --- |
 | `DELIVERED_TABLE_SPEC` | `eats-express-512014:eats_express_dataset.delivered_orders` |
 | `OTHERS_TABLE_SPEC` | `eats-express-512014:eats_express_dataset.other_status_orders` |
-| `DATASET_ID` | `eats-express-512014:eats_express_dataset` |
+| `DATASET_ID` | `eats-express-512014.eats_express_dataset` |
 | Dataset location on creation | `US` |
 
 Replace the project and destination values for your environment. Passing `--project` configures Beam; it does **not** replace these hardcoded table or dataset values.
 
-The intended table layout separates delivered orders from not-delivered orders. Currently both sinks reference `DELIVERED_TABLE_SPEC`, and `OTHERS_TABLE_SPEC` is unused.
+The intended table layout separates delivered orders from not-delivered orders. Delivered orders use `DELIVERED_TABLE_SPEC`; not-delivered orders use `OTHERS_TABLE_SPEC`. Both sinks request daily ingestion-time partitioning for newly created tables.
 
 ### Cloud prerequisites
 
@@ -202,7 +202,7 @@ Store credentials outside the repository. The script does not automatically load
 
 ### DirectRunner interface
 
-After correcting the cloud issues, run from the repository root:
+After configuring destinations and credentials, run from the repository root:
 
 ```bash
 python src/beam.py \
@@ -216,7 +216,7 @@ DirectRunner executes the transforms locally, but this script still accesses Big
 
 ### DataflowRunner interface
 
-After correcting the cloud issues and configuring destinations, an example submission is:
+After configuring destinations and credentials, an example submission is:
 
 ```bash
 python src/beam.py \
@@ -239,6 +239,7 @@ Both BigQuery sinks use `CREATE_IF_NEEDED` and `WRITE_APPEND`. Reprocessing the 
 Validation performed on the current local workflow:
 
 - Python script and notebook code cells parse successfully.
+- The script passes local checks for import safety, dataset handling, schema syntax, numeric conversion, destination routing, and 876 output records with cloud sinks replaced by assertions.
 - Installed direct dependency versions match `requirements.txt`.
 - `python -m pip check` reports no broken requirements.
 - The notebook pipeline completes against the included CSV, writing 869 delivered and 7 undelivered rows to temporary output files.
