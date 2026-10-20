@@ -1,3 +1,26 @@
 /NOTES
-.vscode
+.vscode/
 .DS_Store
+
+# Python environments and caches
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+.aws/
+
+# Generated pipeline output and Airflow runtime files
+/data/output/
+/airflow/
+/logs/
+airflow.db
+airflow.db-*
