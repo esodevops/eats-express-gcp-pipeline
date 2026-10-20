@@ -1,0 +1,8 @@
+# Use Python 3.12 for this dependency set.
+pandas==2.1.4
+apache-beam[gcp]==2.70.0
+apache-airflow==2.10.5
+google-cloud-storage==2.19.0
+google-cloud-bigquery==3.20.1
+apache-airflow-providers-google==12.0.0
+apache-airflow-providers-apache-beam==6.0.0
