@@ -9,56 +9,62 @@ import re
 
 import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
+from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 
 
 # BigQuery destinations use project:dataset.table notation.
 DELIVERED_TABLE_SPEC = "eats-express-512014:eats_express_dataset.delivered_orders"
 OTHERS_TABLE_SPEC = "eats-express-512014:eats_express_dataset.other_status_orders"
-DATASET_ID = "eats-express-512014:eats_express_dataset"
-
-# Column order must match the dictionaries returned by to_json.
+DATASET_ID = "eats-express-512014.eats_express_dataset"
 
 
-TABLE_SCHEMA = """
-Customer_id: STRING,
-date: STRING
-timestamp: STRING
-order_id: STRING
-items: STRING
-amount: INTEGER
-mode: STRING
-restaurant: STRING
-status: STRING
-ratings: STRING
-feedback: STRING
-new_column: STRING
-"""
+
+schema = [
+    "STRING", "DATE", "TIMESTAMP", "STRING",
+    "STRING", "INTEGER", "STRING", "STRING",
+    "STRING", "INTEGER", "STRING"
+]
+
+# BigQuery types match the values returned by to_json.
 
 
-def remove_last_colon(item):
-    """Remove a trailing colon from the items field, when present."""
-    if item.endswith(":"):
-        return item[:-1]
-    return item
+TABLE_SCHEMA = (
+    "Customer_id:STRING,date:STRING,timestamp:STRING,order_id:STRING,"
+    "items:STRING,amount:INTEGER,mode:STRING,restaurant:STRING,"
+    "status:STRING,ratings:INTEGER,feedback:STRING,new_column:STRING"
+)
 
 
-def process_row(row):
-    """Clean the items column and return the comma-separated row."""
-    columns = row.split(",")
-    if len(columns) > 4:
-        columns[4] = remove_last_colon(columns[4])
-    return ",".join(columns)
+class ProcessRowFn(beam.DoFn):
+    def remove_last_colon(self, item):
+        """Remove a trailing colon from the items field, when present."""
+        if item.endswith(":"):
+            return item[:-1]
+        return item
 
 
-def remove_special_characters(row):
-    """Keep letters, digits, and spaces within each comma-separated field."""
-    columns = row.split(",")
-    ret = ""
-    for col in columns:
-        ret += re.sub(r"[^a-zA-Z0-9 ]", "", col) + ","
-    return ret[:-1]
+    def process(self, row):
+        """Clean the items column and return the comma-separated row."""
+        columns = row.split(",")
+        if len(columns) > 4:
+            columns[4] = self.remove_last_colon(columns[4])
+        yield ",".join(columns)
 
+class RemoveSpecialCharactersFn(beam.DoFn):
+    def __init__(self, schema):
+        self.schema = schema
+
+    def process(self, row):
+        """Clean string fields while preserving date, time, and numeric fields."""
+
+        cols = row.split(",")
+        cleaned_cols = []
+        for col, col_type in zip(cols, self.schema):
+            if col_type == "STRING":
+                col = re.sub(r"[^a-zA-Z0-9 ]", "", col)
+            cleaned_cols.append(col)
+        yield ','.join(cleaned_cols)
 
 def print_row(row):
     """Print a row when inspecting intermediate pipeline output."""
@@ -74,11 +80,11 @@ def to_json(row):
         "timestamp": fields[2],
         "order_id": fields[3],
         "items": fields[4],
-        "amount": fields[5],
+        "amount": int(fields[5]),
         "mode": fields[6],
         "restaurant": fields[7],
         "status": fields[8],
-        "ratings": fields[9],
+        "ratings": int(fields[9]),
         "feedback": fields[10],
         "new_column": fields[11],
     }
@@ -94,16 +100,16 @@ def parse_arguments(argv=None):
 
 
 def ensure_dataset():
-    """Look up the target dataset and attempt to create it if lookup fails."""
+    """Look up the target dataset and attempt to create it if it does not exist."""
     client = bigquery.Client()
     try:
         client.get_dataset(DATASET_ID)
-    except Exception:
+    except NotFound:
         # Dataset setup runs once on the submitting machine, before Beam starts.
         dataset = bigquery.Dataset(DATASET_ID)
         dataset.location = "US"
         dataset.description = "Dataset for food orders"
-        client.create_dataset(DATASET_ID, exists_ok=True)
+        client.create_dataset(dataset, exists_ok=True)
 
 
 def run_pipeline(input_file, pipeline_args):
@@ -113,10 +119,10 @@ def run_pipeline(input_file, pipeline_args):
         cleaned_data = (
             p
             | "Read Input File" >> beam.io.ReadFromText(input_file, skip_header_lines=1)
-            | "Process Items Column" >> beam.Map(process_row)
+            | "Process Items Column" >> beam.ParDo(ProcessRowFn())
             | "Convert to lowercase" >> beam.Map(lambda row: row.lower())
-            | "Remove special characters" >> beam.Map(remove_special_characters)
-            | "Add Count Column" >> beam.Map(lambda row: row + ', 1')
+            | "Remove special characters" >> beam.ParDo(RemoveSpecialCharactersFn(schema))
+            | "Add Count Column" >> beam.Map(lambda row: row + ',1')
         )
 
         # Status matching uses the source value after trimming and lowercasing.
@@ -147,7 +153,7 @@ def run_pipeline(input_file, pipeline_args):
                 schema=TABLE_SCHEMA,
                 create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
                 write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
-                additional_bq_parameters={'timePartioning': {'type': 'DAY'}}
+                additional_bq_parameters={'timePartitioning': {'type': 'DAY'}}
                 )
         )
 
@@ -156,12 +162,12 @@ def run_pipeline(input_file, pipeline_args):
             | "Undelivered to JSON" >> beam.Map(to_json)
             | "Write Undelivered Order to BigQuery"
             >> beam.io.WriteToBigQuery(
-                DELIVERED_TABLE_SPEC,
+                OTHERS_TABLE_SPEC,
                 schema=TABLE_SCHEMA,
                 create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
                 write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
-                additional_bq_parameters={'timePartioning': {'type': 'DAY'}}
-                )
+                additional_bq_parameters={"timePartitioning": {"type": "DAY"}},
+            )
         )
 
 
